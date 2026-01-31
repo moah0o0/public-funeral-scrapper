@@ -116,6 +116,7 @@ class Pipeline:
                         err_msg,
                         f"실패(type:{type(e).__name__})"
                     )
+                    result["success"] = False
                     result["error"] = str(e)
                     # 개별 스크래퍼 실패는 무시하고 다음 구청으로 계속 진행
                     continue

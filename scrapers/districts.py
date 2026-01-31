@@ -6,6 +6,7 @@
 from typing import List, Dict, Optional
 from bs4 import BeautifulSoup
 import re
+import os
 
 from scrapers.base import BaseScraper, OnClickScraper, BlogStyleScraper, PostMethodScraper
 from core.http_client import HttpClient
@@ -300,9 +301,9 @@ class SuyeongScraper(BaseScraper):
 class YeongdoguScraper(BaseScraper):
     """영도구 (이미지 OCR 방식)"""
 
-    # Naver CLOVA OCR API
-    OCR_API_URL = "https://o0v9dnau5o.apigw.ntruss.com/custom/v1/29701/6f0df1e6ba1e4a4de121b34920303cfafd6f1f077cf4bd15dbf6bcf12e507509/general"
-    OCR_API_SECRET = "dFVFV2xvbHBJRHVBREd0YWtvRWJMc3JXUnFRSVNuZWw="
+    # Naver CLOVA OCR API (환경 변수에서 로드)
+    OCR_API_URL = os.environ.get("NAVER_OCR_API_URL", "")
+    OCR_API_SECRET = os.environ.get("NAVER_OCR_SECRET", "")
 
     @property
     def base_url(self) -> str:
@@ -342,19 +343,42 @@ class YeongdoguScraper(BaseScraper):
         ]
 
     def fetch_content(self, url: str) -> Optional[str]:
-        """이미지 다운로드 후 OCR로 텍스트 추출"""
+        """텍스트 우선 추출, 없으면 이미지 OCR로 폴백"""
         import hashlib
         import json
         import uuid
         import time
         import tempfile
         import os
+        import logging
+
+        logger = logging.getLogger(__name__)
 
         try:
-            # 상세 페이지에서 이미지 URL 추출
+            # 상세 페이지 가져오기
             response = self.client.get(url, force_tor=self.force_tor)
             response.encoding = "utf-8"
-            soup = BeautifulSoup(response.text.replace("<br/>", "\n"), "html.parser")
+            html_text = response.text
+            soup = BeautifulSoup(html_text.replace("<br/>", "\n"), "html.parser")
+
+            # 1. 먼저 텍스트 직접 추출 시도 (substanceautolink div)
+            if "substanceautolink" in html_text:
+                match = re.search(r'<div class="substanceautolink">(.*?)</div>', html_text, re.DOTALL)
+                if match:
+                    raw_content = match.group(1)
+                    # HTML 태그와 엔티티 정리
+                    text_content = re.sub(r'<[^>]+>', '\n', raw_content)
+                    text_content = text_content.replace('&nbsp;', ' ')
+                    text_content = '\n'.join(line.strip() for line in text_content.split('\n') if line.strip())
+
+                    if text_content and len(text_content) > 20:
+                        logger.debug(f"영도구 텍스트 직접 추출 성공: {url}")
+                        return text_content
+
+            # 2. 텍스트가 없으면 이미지 OCR로 폴백
+            if not self.OCR_API_URL or not self.OCR_API_SECRET:
+                logger.warning("OCR API 설정이 없어 이미지 처리 불가")
+                return None
 
             img_link = soup.select_one(self.content_selector)
             if not img_link or 'href' not in img_link.attrs:
@@ -413,11 +437,13 @@ class YeongdoguScraper(BaseScraper):
                                 result += " " + word.get('inferText', '')
                             result += "\n"
 
+            if result.strip():
+                logger.debug(f"영도구 OCR 추출 성공: {url}")
             return result.strip() if result else None
 
         except Exception as e:
             import logging
-            logging.getLogger(__name__).error(f"영도구 OCR 처리 실패: {url} - {e}")
+            logging.getLogger(__name__).error(f"영도구 처리 실패: {url} - {e}")
             return None
 
 

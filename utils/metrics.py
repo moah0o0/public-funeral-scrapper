@@ -178,8 +178,9 @@ class MetricsCollector:
         result = {"success": False, "items": 0, "used_tor": False, "error": None}
         try:
             yield result
-            result["success"] = True
+            # success는 호출자가 명시적으로 설정 (자동 True 설정 제거)
         except Exception as e:
+            result["success"] = False
             result["error"] = str(e)
             raise
         finally:
