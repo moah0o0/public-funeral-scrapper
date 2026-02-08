@@ -47,7 +47,10 @@ class PocketbaseClient:
             response.raise_for_status()
             data = response.json()
             self.token = data.get("token")
-            logger.info("Pocketbase 인증 성공")
+            if not self.token:
+                logger.error(f"Pocketbase 인증 응답에 token 없음. 응답 키: {list(data.keys())}")
+                return False
+            logger.info(f"Pocketbase 인증 성공 (token: {self.token[:20]}...)")
             return True
         except Exception as e:
             logger.error(f"Pocketbase 인증 실패: {e}")
@@ -65,7 +68,8 @@ class PocketbaseClient:
         method: str,
         endpoint: str,
         data: Optional[Dict] = None,
-        params: Optional[Dict] = None
+        params: Optional[Dict] = None,
+        _retried: bool = False
     ) -> Optional[Dict]:
         """API 요청"""
         try:
@@ -81,11 +85,24 @@ class PocketbaseClient:
             response.raise_for_status()
             return response.json()
         except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 401:
-                # 토큰 만료 - 재인증 시도
+            # 응답 본문 로깅 (디버깅용)
+            response_body = None
+            try:
+                response_body = e.response.json()
+            except Exception:
+                response_body = e.response.text[:500] if e.response.text else None
+
+            if e.response.status_code in (401, 403) or (
+                e.response.status_code == 400 and not _retried
+                and response_body and isinstance(response_body, dict)
+                and "rule" in str(response_body.get("message", "")).lower()
+            ):
+                # 토큰 만료 또는 인증 관련 rule 실패 - 재인증 시도
+                logger.warning(f"인증 관련 오류 감지 (HTTP {e.response.status_code}), 재인증 시도...")
                 if self.authenticate():
-                    return self._request(method, endpoint, data, params)
-            logger.error(f"Pocketbase 요청 실패: {e}")
+                    return self._request(method, endpoint, data, params, _retried=True)
+
+            logger.error(f"Pocketbase 요청 실패: {e} | 응답: {response_body}")
             return None
         except Exception as e:
             logger.error(f"Pocketbase 요청 오류: {e}")
